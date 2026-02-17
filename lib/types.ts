@@ -5,6 +5,7 @@ export interface ProbeNodeResult {
   name: string;
   region?: string;
   latencyMs?: number;
+  avgLatencyMs?: number;
   lossPct?: number;
   status: ProbeStatus;
   message?: string;

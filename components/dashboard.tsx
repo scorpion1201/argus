@@ -21,7 +21,17 @@ function statusClass(status: ProbeNodeResult['status']): string {
 
 function formatMs(value: number | null | undefined): string {
   if (value === null || value === undefined) return '-';
-  return `${value} ms`;
+  if (value <= 0.4) {
+    return '0 ms';
+  }
+  if (value < 1) {
+    const rounded = Number(value.toFixed(2));
+    if (rounded === 0) {
+      return '0 ms';
+    }
+    return `${rounded.toFixed(2)} ms`;
+  }
+  return `${Math.round(value)} ms`;
 }
 
 export default function Dashboard() {
@@ -130,6 +140,7 @@ export default function Dashboard() {
                 <col className="col-region" />
                 <col className="col-status" />
                 <col className="col-latency" />
+                <col className="col-latency" />
                 <col className="col-loss" />
                 <col className="col-message" />
               </colgroup>
@@ -139,6 +150,7 @@ export default function Dashboard() {
                   <th className="col-center">리전</th>
                   <th className="col-center">상태</th>
                   <th className="col-center">지연시간</th>
+                  <th className="col-center">평균 지연시간</th>
                   <th className="col-center">손실률</th>
                   <th className="col-message-head">메시지</th>
                 </tr>
@@ -146,7 +158,7 @@ export default function Dashboard() {
               <tbody>
                 {nodes.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="empty">
+                    <td colSpan={7} className="empty">
                       표시할 노드 데이터가 없습니다.
                     </td>
                   </tr>
@@ -160,6 +172,7 @@ export default function Dashboard() {
                       <span className={statusClass(node.status)}>{statusLabels[node.status]}</span>
                     </td>
                     <td className="col-center">{formatMs(node.latencyMs)}</td>
+                    <td className="col-center">{formatMs(node.avgLatencyMs)}</td>
                     <td className="col-center">{node.lossPct !== undefined ? `${node.lossPct}%` : '-'}</td>
                     <td className={node.message ? 'col-message-cell' : 'col-message-cell col-message-empty'}>
                       {node.message || '-'}

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "jest"
   },
   "dependencies": {
     "next": "16.1.6",
@@ -14,11 +15,14 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@jest/globals": "^30.2.0",
     "@types/node": "20.17.19",
     "@types/react": "18.3.18",
     "@types/react-dom": "18.3.5",
     "eslint": "8.57.1",
     "eslint-config-next": "14.2.32",
+    "jest": "^30.2.0",
+    "ts-jest": "^29.4.6",
     "typescript": "5.7.3"
   }
 }

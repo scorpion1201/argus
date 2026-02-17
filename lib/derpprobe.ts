@@ -5,6 +5,71 @@ import { ProbeNodeResult, ProbeResponse, ProbeStatus } from './types';
 
 const DEFAULT_TIMEOUT_MS = 75_000;
 const MIN_ONCE_TIMEOUT_MS = 65_000;
+const PROBE_WINDOW_SIZE = 10;
+const CALIBRATION_WINDOW_MINS = 10;
+const CALIBRATION_FALLBACK_MS = 10;
+const CALIBRATION_WARMUP_MINS = 2;
+
+type NodeProbeSample = {
+  success: boolean;
+  latencyMs?: number;
+};
+
+type DelayPoint = {
+  timestamp: number;
+  rtt: number;
+};
+
+type LatencyCalibrator = (currentRtt: number, currentTime: number) => number;
+
+const nodeProbeHistory = new Map<string, NodeProbeSample[]>();
+const nodeLatencyCalibrators = new Map<string, LatencyCalibrator>();
+
+function createLatencyCalibrator(
+  windowMins: number,
+  fallbackMs: number,
+  warmupMins: number
+): LatencyCalibrator {
+  const windowSize = windowMins * 60 * 1000;
+  const warmupPeriod = warmupMins * 60 * 1000;
+  const startTime = Date.now();
+  const deque: DelayPoint[] = [];
+
+  return (currentRtt: number, currentTime: number): number => {
+    while (deque.length > 0 && currentTime - deque[0].timestamp > windowSize) {
+      deque.shift();
+    }
+
+    while (deque.length > 0 && deque[deque.length - 1].rtt >= currentRtt) {
+      deque.pop();
+    }
+
+    deque.push({ timestamp: currentTime, rtt: currentRtt });
+
+    let baseline = deque[0]?.rtt ?? currentRtt;
+    if (currentTime - startTime < warmupPeriod && baseline > fallbackMs) {
+      baseline = fallbackMs;
+    }
+
+    const netDelay = Math.max(0, currentRtt - baseline);
+    return Number(netDelay.toFixed(2));
+  };
+}
+
+function getNodeLatencyCalibrator(nodeId: string): LatencyCalibrator {
+  const existing = nodeLatencyCalibrators.get(nodeId);
+  if (existing) {
+    return existing;
+  }
+
+  const created = createLatencyCalibrator(
+    CALIBRATION_WINDOW_MINS,
+    CALIBRATION_FALLBACK_MS,
+    CALIBRATION_WARMUP_MINS
+  );
+  nodeLatencyCalibrators.set(nodeId, created);
+  return created;
+}
 
 function parseArgs(argsText: string): string[] {
   if (!argsText.trim()) {
@@ -74,111 +139,6 @@ function toNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function normalizeStatus(latencyMs?: number, lossPct?: number, err?: string): ProbeStatus {
-  if (err && err.length > 0) {
-    return 'down';
-  }
-  if (latencyMs === undefined) {
-    return 'unknown';
-  }
-  if (lossPct !== undefined && lossPct >= 20) {
-    return 'degraded';
-  }
-  if (latencyMs >= 180) {
-    return 'degraded';
-  }
-  return 'healthy';
-}
-
-function flattenObjects(input: unknown): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-
-  function visit(node: unknown): void {
-    if (!node) {
-      return;
-    }
-
-    if (Array.isArray(node)) {
-      node.forEach(visit);
-      return;
-    }
-
-    if (typeof node === 'object') {
-      const obj = node as Record<string, unknown>;
-      out.push(obj);
-      Object.values(obj).forEach(visit);
-    }
-  }
-
-  visit(input);
-  return out;
-}
-
-function pickNodeRecords(raw: unknown): ProbeNodeResult[] {
-  const checkedAt = new Date().toISOString();
-  const objects = flattenObjects(raw);
-
-  const seen = new Set<string>();
-  const nodes: ProbeNodeResult[] = [];
-
-  for (const obj of objects) {
-    const id =
-      (typeof obj.id === 'string' && obj.id) ||
-      (typeof obj.node === 'string' && obj.node) ||
-      (typeof obj.name === 'string' && obj.name) ||
-      (typeof obj.regionCode === 'string' && obj.regionCode) ||
-      '';
-
-    const latencyMs =
-      toNumber(obj.latencyMs) ??
-      toNumber(obj.latency_ms) ??
-      toNumber(obj.latency) ??
-      toNumber(obj.pingMs);
-
-    const lossPct =
-      toNumber(obj.lossPct) ?? toNumber(obj.loss_pct) ?? toNumber(obj.packetLossPct);
-
-    const err =
-      (typeof obj.error === 'string' && obj.error) ||
-      (typeof obj.err === 'string' && obj.err) ||
-      (typeof obj.message === 'string' && obj.message) ||
-      undefined;
-
-    if (!id && latencyMs === undefined && lossPct === undefined && !err) {
-      continue;
-    }
-
-    const key = id || JSON.stringify(obj);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-
-    const status = normalizeStatus(latencyMs, lossPct, err);
-    nodes.push({
-      id: id || `node-${nodes.length + 1}`,
-      name:
-        (typeof obj.name === 'string' && obj.name) ||
-        (typeof obj.nodeName === 'string' && obj.nodeName) ||
-        id ||
-        `Node ${nodes.length + 1}`,
-      region:
-        (typeof obj.region === 'string' && obj.region) ||
-        (typeof obj.regionName === 'string' && obj.regionName) ||
-        (typeof obj.regionCode === 'string' && obj.regionCode) ||
-        undefined,
-      latencyMs,
-      lossPct,
-      status,
-      message: err,
-      checkedAt,
-      raw: obj
-    });
-  }
-
-  return nodes;
-}
-
 function summarize(nodes: ProbeNodeResult[]): ProbeResponse['summary'] {
   const summary = {
     total: nodes.length,
@@ -205,44 +165,51 @@ function summarize(nodes: ProbeNodeResult[]): ProbeResponse['summary'] {
   return summary;
 }
 
-function parseOutput(stdout: string): unknown {
-  const text = stdout.trim();
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    const lines = text
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    const parsedLines: unknown[] = [];
-    for (const line of lines) {
-      try {
-        parsedLines.push(JSON.parse(line));
-      } catch {
-        // skip non-JSON lines
-      }
+function updateNodeLossFromHistory(nodes: ProbeNodeResult[]): void {
+  const now = Date.now();
+  for (const node of nodes) {
+    if (typeof node.latencyMs === 'number') {
+      const calibrator = getNodeLatencyCalibrator(node.id);
+      node.latencyMs = calibrator(node.latencyMs, now);
     }
 
-    if (parsedLines.length > 0) {
-      return parsedLines;
+    const success = node.status === 'healthy' || node.status === 'degraded';
+    const history = nodeProbeHistory.get(node.id) ?? [];
+    history.push({ success, latencyMs: node.latencyMs });
+    if (history.length > PROBE_WINDOW_SIZE) {
+      history.splice(0, history.length - PROBE_WINDOW_SIZE);
     }
+    nodeProbeHistory.set(node.id, history);
 
-    return { text };
+    const successCount = history.filter((sample) => sample.success).length;
+    const successRate = successCount / history.length;
+    node.lossPct = Math.round((1 - successRate) * 100);
+
+    const latencySamples = history
+      .map((sample) => sample.latencyMs)
+      .filter((value): value is number => typeof value === 'number');
+    if (latencySamples.length > 0) {
+      const avg = latencySamples.reduce((total, value) => total + value, 0) / latencySamples.length;
+      node.avgLatencyMs = avg >= 1 ? Math.round(avg) : Number(avg.toFixed(2));
+    } else {
+      node.avgLatencyMs = undefined;
+    }
   }
 }
 
 function parseLatencyMs(text: string): number | undefined {
-  const match = text.match(/([0-9]+(?:\.[0-9]+)?)ms/);
+  const match = text.match(/([0-9]+(?:\.[0-9]+)?)\s*(ms|µs|μs|us)\b/i);
   if (!match) {
     return undefined;
   }
   const value = Number(match[1]);
-  return Number.isFinite(value) ? Math.round(value) : undefined;
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const unit = match[2].toLowerCase();
+  const valueMs = unit === 'ms' ? Math.round(value) : Number((value / 1000).toFixed(2));
+  return Number.isFinite(valueMs) ? valueMs : undefined;
 }
 
 function normalizeProbeMessage(probeType: string, resultText: string): string {
@@ -312,6 +279,12 @@ function parseNodesFromProbeLog(
     .split('\n')
     .map((line) => stripLogPrefix(line))
     .filter(Boolean);
+  const isIpv6UnsupportedNetwork = lines.some(
+    (line) =>
+      line.includes('/udp6:') &&
+      line.includes('network is unreachable') &&
+      (line.includes('write udp [::]') || line.includes('dial udp [::]'))
+  );
 
   type TempNode = {
     id: string;
@@ -321,7 +294,7 @@ function parseNodesFromProbeLog(
     bad: number;
     badUdp6: number;
     nonUdp6Error: boolean;
-    latencySamples: number[];
+    udpLatencyMs?: number;
     messages: string[];
   };
 
@@ -354,21 +327,25 @@ function parseNodesFromProbeLog(
       bad: 0,
       badUdp6: 0,
       nonUdp6Error: false,
-      latencySamples: [],
+      udpLatencyMs: undefined,
       messages: []
     };
 
     if (level === 'good') {
       node.good += 1;
-      const latency = parseLatencyMs(resultText);
-      if (latency !== undefined) {
-        node.latencySamples.push(latency);
+      if (probeType === 'udp') {
+        const latency = parseLatencyMs(resultText);
+        if (latency !== undefined) {
+          node.udpLatencyMs = latency;
+        }
       }
     } else {
       node.bad += 1;
       node.messages.push(normalizeProbeMessage(probeType, resultText));
       if (probeType === 'udp6' && resultText.includes('network is unreachable')) {
-        node.badUdp6 += 1;
+        if (!isIpv6UnsupportedNetwork) {
+          node.badUdp6 += 1;
+        }
       } else {
         node.nonUdp6Error = true;
       }
@@ -379,14 +356,6 @@ function parseNodesFromProbeLog(
 
   const nodes: ProbeNodeResult[] = [];
   for (const node of map.values()) {
-    const avgLatencyMs =
-      node.latencySamples.length > 0
-        ? Math.round(
-            node.latencySamples.reduce((total, value) => total + value, 0) /
-              node.latencySamples.length
-          )
-        : undefined;
-
     let status: ProbeStatus = 'unknown';
     if (node.nonUdp6Error || (node.bad > 0 && node.good === 0)) {
       status = 'down';
@@ -400,7 +369,7 @@ function parseNodesFromProbeLog(
       id: node.id,
       name: node.name,
       region: node.region,
-      latencyMs: avgLatencyMs,
+      latencyMs: node.udpLatencyMs,
       status,
       message: node.messages.length > 0 ? node.messages.join(' | ') : undefined,
       checkedAt
@@ -430,41 +399,6 @@ function parseNodesFromProbeLog(
   return nodes;
 }
 
-function isIpv6OnlyProbeFailure(stderr: string): boolean {
-  const lines = stderr
-    .split('\n')
-    .map((line) => stripLogPrefix(line))
-    .filter(Boolean);
-
-  const badLines = lines.filter((line) => line.startsWith('bad: derp/'));
-  if (badLines.length === 0) {
-    return false;
-  }
-
-  const goodUdp6Lines = lines.filter((line) => line.startsWith('good: derp/') && line.includes('/udp6:'));
-  const goodNonUdp6Lines = lines.filter(
-    (line) => line.startsWith('good: derp/') && !line.includes('/udp6:')
-  );
-  if (goodUdp6Lines.length > 0 || goodNonUdp6Lines.length === 0) {
-    return false;
-  }
-
-  const allBadAreUdp6Unreachable = badLines.every(
-    (line) => line.includes('/udp6:') && line.includes('network is unreachable')
-  );
-  if (!allBadAreUdp6Unreachable) {
-    return false;
-  }
-
-  const badNonUdp6Lines = badLines.filter((line) => !line.includes('/udp6:'));
-  if (badNonUdp6Lines.length > 0) {
-    return false;
-  }
-
-  // Host-side IPv6 미구성의 전형적인 에러 형태를 추가로 확인한다.
-  return badLines.every((line) => line.includes('write udp [::]') || line.includes('dial udp [::]'));
-}
-
 export async function runDerpprobe(): Promise<ProbeResponse> {
   const startedAt = Date.now();
   const command = process.env.DERPPROBE_BIN || 'derpprobe';
@@ -478,11 +412,10 @@ export async function runDerpprobe(): Promise<ProbeResponse> {
 
   return await new Promise<ProbeResponse>((resolve) => {
     const child = spawn(command, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: process.env
     });
 
-    let stdout = '';
     let stderr = '';
     let settled = false;
 
@@ -511,10 +444,6 @@ export async function runDerpprobe(): Promise<ProbeResponse> {
         error: `derpprobe timed out after ${timeoutMs}ms`
       });
     }, timeoutMs);
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-    });
 
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
@@ -556,12 +485,10 @@ export async function runDerpprobe(): Promise<ProbeResponse> {
       settled = true;
 
       const checkedAt = new Date().toISOString();
-      const raw = parseOutput(stdout);
-      const rawNodes = pickNodeRecords(raw);
-      const nodes =
-        rawNodes.length > 0 ? rawNodes : parseNodesFromProbeLog(stderr, checkedAt, regionIdMap);
+      const nodes = parseNodesFromProbeLog(stderr, checkedAt, regionIdMap);
+      updateNodeLossFromHistory(nodes);
       const summary = summarize(nodes);
-      const ok = code === 0 || (code === 1 && isIpv6OnlyProbeFailure(stderr));
+      const ok = code === 0 || (code === 1 && nodes.every(node => node.status === 'healthy'));
 
       resolve({
         ok,
@@ -575,8 +502,7 @@ export async function runDerpprobe(): Promise<ProbeResponse> {
             ? `derpprobe exited with code ${code}`
             : !ok
               ? 'derpprobe exited with an unknown error'
-              : undefined,
-        raw
+              : undefined
       });
     });
   });
