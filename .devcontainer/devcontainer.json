@@ -1,0 +1,22 @@
+{
+  "name": "argus-dev",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached",
+  "mounts": [
+    "source=${localWorkspaceFolder}/derpmap,target=/derpmap,type=bind,readonly",
+    "source=argus-node-modules,target=/app/node_modules,type=volume",
+    "source=argus-next,target=/app/.next,type=volume"
+  ],
+  "containerEnv": {
+    "DERPPROBE_BIN": "derpprobe",
+    "CHOKIDAR_USEPOLLING": "true",
+    "WATCHPACK_POLLING": "true"
+  },
+  "postCreateCommand": "yarn install",
+  "overrideCommand": false,
+  "forwardPorts": [3000]
+}

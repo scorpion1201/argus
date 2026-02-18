@@ -1,0 +1,25 @@
+# VCS / editor
+.git
+.gitignore
+.DS_Store
+
+# devcontainer
+.devcontainer
+
+# Build artifacts
+.next
+node_modules
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+
+# etc
+README.md
+derpmap/README.md
+derpmap/derpmap-sample.json

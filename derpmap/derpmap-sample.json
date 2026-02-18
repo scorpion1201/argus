@@ -1,0 +1,24 @@
+{
+  "OmitDefaultRegions": true,
+  "Regions": {
+    "900": {
+      "RegionID": 900,
+      "RegionCode": "sel",
+      "RegionName": "Seoul",
+      "Nodes": [
+        {
+          "Name": "Seoul",
+          "RegionID": 900,
+          "HostName": "derp.example.com",
+          "IPv4": "203.0.113.10",
+          "IPv6": "2001:db8:100::10",
+          "DERPPort": 443,
+          "STUNPort": 3478,
+          "STUNOnly": false,
+          "InsecureForTests": false,
+          "CanPort80": false
+        }
+      ]
+    }
+  }
+}
