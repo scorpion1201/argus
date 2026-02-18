@@ -1,4 +1,4 @@
-ARG NODE_IMAGE=node:20-bookworm-slim
+ARG NODE_IMAGE=node:24-alpine
 ARG GO_IMAGE=golang:1.25-alpine
 
 FROM ${GO_IMAGE} AS derpprobe-builder
@@ -9,10 +9,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
   go install tailscale.com/cmd/derpprobe@${TAILSCALE_VERSION}
 
 FROM ${NODE_IMAGE} AS dev
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends bash ca-certificates \
-  && update-ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache zsh ca-certificates \
+  && update-ca-certificates
 RUN corepack enable && corepack prepare yarn@stable --activate
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
