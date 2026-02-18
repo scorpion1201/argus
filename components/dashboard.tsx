@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ProbeNodeResult, ProbeResponse } from '@/lib/types';
 
 const REFRESH_MS = 15_000;
+const THEME_STORAGE_KEY = 'argus-theme-mode';
+
+type ThemeMode = 'light' | 'dark' | 'system';
 
 const statusLabels: Record<ProbeNodeResult['status'], string> = {
   healthy: '정상',
@@ -12,14 +15,14 @@ const statusLabels: Record<ProbeNodeResult['status'], string> = {
   unknown: '미확인'
 };
 
-function statusClass(status: ProbeNodeResult['status']): string {
+const statusClass = (status: ProbeNodeResult['status']): string => {
   if (status === 'healthy') return 'status status-healthy';
   if (status === 'degraded') return 'status status-degraded';
   if (status === 'down') return 'status status-down';
   return 'status status-unknown';
-}
+};
 
-function formatMs(value: number | null | undefined): string {
+const formatMs = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return '-';
   if (value <= 0.4) {
     return '0 ms';
@@ -32,13 +35,54 @@ function formatMs(value: number | null | undefined): string {
     return `${rounded.toFixed(2)} ms`;
   }
   return `${Math.round(value)} ms`;
-}
+};
 
-export default function Dashboard() {
+const ThemeIcon = ({ mode }: { mode: ThemeMode }) => {
+  if (mode === 'light') {
+    return (
+      <span className="theme-icon" aria-hidden>
+        ☀
+      </span>
+    );
+  }
+
+  if (mode === 'dark') {
+    return (
+      <span className="theme-icon" aria-hidden>
+        ☾
+      </span>
+    );
+  }
+
+  return (
+    <svg
+      className="theme-icon theme-icon-svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="3.5" y="4.5" width="17" height="11.5" rx="1.8" />
+      <path d="M9.2 19.5h5.6" />
+      <path d="M12 16v3.5" />
+    </svg>
+  );
+};
+
+const Dashboard = () => {
   const [data, setData] = useState<ProbeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoUpdate, setAutoUpdate] = useState(true);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
+  const [themeFabOpen, setThemeFabOpen] = useState(false);
+
+  const applyTheme = useCallback((mode: ThemeMode) => {
+    document.documentElement.setAttribute('color-theme', mode);
+  }, []);
 
   const fetchProbe = useCallback(async () => {
     setLoading(true);
@@ -72,13 +116,79 @@ export default function Dashboard() {
     return () => window.clearInterval(timer);
   }, [fetchProbe, autoUpdate]);
 
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const initialTheme: ThemeMode =
+      savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'system';
+    setThemeMode(initialTheme);
+    applyTheme(initialTheme);
+  }, [applyTheme]);
+
+  const onChangeTheme = useCallback(
+    (mode: ThemeMode) => {
+      setThemeMode(mode);
+      applyTheme(mode);
+      window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    },
+    [applyTheme]
+  );
+
   const nodes = data?.nodes ?? [];
   const checkedAtText = data?.checkedAt
     ? new Date(data.checkedAt).toLocaleString('ko-KR')
     : '아직 없음';
-
   return (
     <div className="page">
+      <div className={themeFabOpen ? 'theme-fab is-open' : 'theme-fab'}>
+        <div className="theme-fab-menu" role="group" aria-label="컬러 모드">
+          <button
+            type="button"
+            className={themeMode === 'light' ? 'theme-btn is-active' : 'theme-btn'}
+            onClick={() => {
+              onChangeTheme('light');
+              setThemeFabOpen(false);
+            }}
+            aria-label="Light mode"
+            title="Light mode"
+          >
+            <ThemeIcon mode="light" />
+          </button>
+          <button
+            type="button"
+            className={themeMode === 'dark' ? 'theme-btn is-active' : 'theme-btn'}
+            onClick={() => {
+              onChangeTheme('dark');
+              setThemeFabOpen(false);
+            }}
+            aria-label="Dark mode"
+            title="Dark mode"
+          >
+            <ThemeIcon mode="dark" />
+          </button>
+          <button
+            type="button"
+            className={themeMode === 'system' ? 'theme-btn is-active' : 'theme-btn'}
+            onClick={() => {
+              onChangeTheme('system');
+              setThemeFabOpen(false);
+            }}
+            aria-label="System mode"
+            title="System mode"
+          >
+            <ThemeIcon mode="system" />
+          </button>
+        </div>
+        <button
+          type="button"
+          className="theme-fab-toggle"
+          onClick={() => setThemeFabOpen((prev) => !prev)}
+          aria-label="Select color scheme"
+          title="Select color scheme"
+          aria-expanded={themeFabOpen}
+        >
+          <ThemeIcon mode={themeMode} />
+        </button>
+      </div>
       <div className="content-stack">
         <section className="hero">
           <div>
@@ -189,4 +299,6 @@ export default function Dashboard() {
       </footer>
     </div>
   );
-}
+};
+
+export default Dashboard;
