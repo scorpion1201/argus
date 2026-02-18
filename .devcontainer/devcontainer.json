@@ -4,6 +4,7 @@
     "context": ".",
     "dockerfile": "Dockerfile"
   },
+  "runArgs": ["-p", "3000:3000"],
   "workspaceFolder": "/app",
   "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind,consistency=cached",
   "mounts": [
@@ -17,6 +18,7 @@
     "WATCHPACK_POLLING": "true"
   },
   "postCreateCommand": "yarn install",
-  "overrideCommand": false,
+  "postStartCommand": "yarn dev -H 0.0.0.0 -p 3000",
+  "overrideCommand": true,
   "forwardPorts": [3000]
 }
